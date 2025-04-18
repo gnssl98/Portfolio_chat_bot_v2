@@ -1,0 +1,18 @@
+교육 이력:
+Name : 안창훈
+
+Job aspiration : AI 엔지니어 & AI Researcher
+
+경력 : 없음(신입)
+
+학사 (2021년 3월- 2025년 2월)
+- Gachon University
+- 전공: 컴퓨터공학
+
+기술스택: Python, JavaScript, PyTorch, HuggingFace
+
+자격증:
+- 네트워크 관리사 2급
+- ADsP 
+
+취미: 배드민턴, 헬스

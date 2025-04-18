@@ -1,0 +1,29 @@
+기술 스택:
+
+프로그래밍 언어:
+- Python (주 언어)
+- SQL
+- C
+- C++
+- Java
+- JavaScript
+
+
+AI/ML:
+- TensorFlow
+- PyTorch
+- LangChain
+- OpenAI API
+- Hugging Face Transformers
+
+웹 개발:
+- Node.js
+- Flask
+
+
+기타 기술:
+- Git
+- Docker
+- AWS
+- Linux
+- RESTful API 
