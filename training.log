@@ -1,0 +1,138 @@
+2025-04-19 13:11:41,913 - __main__ - ERROR - 벡터 데이터베이스 생성 중 오류 발생: 'SentenceTransformer' object has no attribute 'embed_documents'
+2025-04-19 13:11:41,947 - __main__ - ERROR - Traceback (most recent call last):
+  File "C:\Users\gnssl\OneDrive\Documents\GitHub\Portfolio_chat_bot_v2\test_ragmodel.py", line 410, in create_vector_database
+    vectorstore = FAISS.from_texts(
+  File "D:\dataset\portfolio_chatbot_env\lib\site-packages\langchain_community\vectorstores\faiss.py", line 1043, in from_texts
+    embeddings = embedding.embed_documents(texts)
+  File "D:\dataset\portfolio_chatbot_env\lib\site-packages\torch\nn\modules\module.py", line 1928, in __getattr__
+    raise AttributeError(
+AttributeError: 'SentenceTransformer' object has no attribute 'embed_documents'
+
+2025-04-19 13:11:59,176 - __main__ - ERROR - 컨텍스트 검색 중 오류 발생: The de-serialization relies loading a pickle file. Pickle files can be modified to deliver a malicious payload that results in execution of arbitrary code on your machine.You will need to set `allow_dangerous_deserialization` to `True` to enable deserialization. If you do this, make sure that you trust the source of the data. For example, if you are loading a file that you created, and know that no one else has modified the file, then this is safe to do. Do not set this to `True` if you are loading a file from an untrusted source (e.g., some random site on the internet.).
+2025-04-19 13:11:59,177 - __main__ - ERROR - Traceback (most recent call last):
+  File "C:\Users\gnssl\OneDrive\Documents\GitHub\Portfolio_chat_bot_v2\test_ragmodel.py", line 444, in find_relevant_context
+    vectorstore = FAISS.load_local(VECTOR_DB_PATH, embedding_model)
+  File "D:\dataset\portfolio_chatbot_env\lib\site-packages\langchain_community\vectorstores\faiss.py", line 1190, in load_local
+    raise ValueError(
+ValueError: The de-serialization relies loading a pickle file. Pickle files can be modified to deliver a malicious payload that results in execution of arbitrary code on your machine.You will need to set `allow_dangerous_deserialization` to `True` to enable deserialization. If you do this, make sure that you trust the source of the data. For example, if you are loading a file that you created, and know that no one else has modified the file, then this is safe to do. Do not set this to `True` if you are loading a file from an untrusted source (e.g., some random site on the internet.).
+
+2025-04-19 13:12:04,226 - __main__ - ERROR - 컨텍스트 검색 중 오류 발생: The de-serialization relies loading a pickle file. Pickle files can be modified to deliver a malicious payload that results in execution of arbitrary code on your machine.You will need to set `allow_dangerous_deserialization` to `True` to enable deserialization. If you do this, make sure that you trust the source of the data. For example, if you are loading a file that you created, and know that no one else has modified the file, then this is safe to do. Do not set this to `True` if you are loading a file from an untrusted source (e.g., some random site on the internet.).
+2025-04-19 13:12:04,226 - __main__ - ERROR - Traceback (most recent call last):
+  File "C:\Users\gnssl\OneDrive\Documents\GitHub\Portfolio_chat_bot_v2\test_ragmodel.py", line 444, in find_relevant_context
+    vectorstore = FAISS.load_local(VECTOR_DB_PATH, embedding_model)
+  File "D:\dataset\portfolio_chatbot_env\lib\site-packages\langchain_community\vectorstores\faiss.py", line 1190, in load_local
+    raise ValueError(
+ValueError: The de-serialization relies loading a pickle file. Pickle files can be modified to deliver a malicious payload that results in execution of arbitrary code on your machine.You will need to set `allow_dangerous_deserialization` to `True` to enable deserialization. If you do this, make sure that you trust the source of the data. For example, if you are loading a file that you created, and know that no one else has modified the file, then this is safe to do. Do not set this to `True` if you are loading a file from an untrusted source (e.g., some random site on the internet.).
+
+2025-04-19 13:18:51,989 - __main__ - ERROR - 벡터 데이터베이스 생성 중 오류 발생: 'SentenceTransformer' object has no attribute 'embed_documents'
+2025-04-19 13:18:51,990 - __main__ - ERROR - Traceback (most recent call last):
+  File "C:\Users\gnssl\OneDrive\Documents\GitHub\Portfolio_chat_bot_v2\test_ragmodel.py", line 422, in create_vector_database
+    vectorstore = FAISS.from_texts(
+  File "D:\dataset\portfolio_chatbot_env\lib\site-packages\langchain_community\vectorstores\faiss.py", line 1043, in from_texts
+    embeddings = embedding.embed_documents(texts)
+  File "D:\dataset\portfolio_chatbot_env\lib\site-packages\torch\nn\modules\module.py", line 1928, in __getattr__
+    raise AttributeError(
+AttributeError: 'SentenceTransformer' object has no attribute 'embed_documents'
+
+2025-04-19 13:18:59,123 - __main__ - ERROR - 컨텍스트 검색 중 오류 발생: Error in __cdecl faiss::FileIOReader::FileIOReader(const char *) at D:\a\faiss-wheels\faiss-wheels\faiss\faiss\impl\io.cpp:68: Error: 'f' failed: could not open vector_db\index.faiss for reading: No such file or directory
+2025-04-19 13:18:59,276 - __main__ - ERROR - Traceback (most recent call last):
+  File "C:\Users\gnssl\OneDrive\Documents\GitHub\Portfolio_chat_bot_v2\test_ragmodel.py", line 456, in find_relevant_context
+    vectorstore = FAISS.load_local(VECTOR_DB_PATH,  embeddings=embedding_model, allow_dangerous_deserialization=True)
+  File "D:\dataset\portfolio_chatbot_env\lib\site-packages\langchain_community\vectorstores\faiss.py", line 1205, in load_local
+    index = faiss.read_index(str(path / f"{index_name}.faiss"))
+  File "D:\dataset\portfolio_chatbot_env\lib\site-packages\faiss\swigfaiss_avx2.py", line 10812, in read_index
+    return _swigfaiss_avx2.read_index(*args)
+RuntimeError: Error in __cdecl faiss::FileIOReader::FileIOReader(const char *) at D:\a\faiss-wheels\faiss-wheels\faiss\faiss\impl\io.cpp:68: Error: 'f' failed: could not open vector_db\index.faiss for reading: No such file or directory
+
+2025-04-19 13:19:10,971 - __main__ - ERROR - 컨텍스트 검색 중 오류 발생: Error in __cdecl faiss::FileIOReader::FileIOReader(const char *) at D:\a\faiss-wheels\faiss-wheels\faiss\faiss\impl\io.cpp:68: Error: 'f' failed: could not open vector_db\index.faiss for reading: No such file or directory
+2025-04-19 13:19:10,971 - __main__ - ERROR - Traceback (most recent call last):
+  File "C:\Users\gnssl\OneDrive\Documents\GitHub\Portfolio_chat_bot_v2\test_ragmodel.py", line 456, in find_relevant_context
+    vectorstore = FAISS.load_local(VECTOR_DB_PATH,  embeddings=embedding_model, allow_dangerous_deserialization=True)
+  File "D:\dataset\portfolio_chatbot_env\lib\site-packages\langchain_community\vectorstores\faiss.py", line 1205, in load_local
+    index = faiss.read_index(str(path / f"{index_name}.faiss"))
+  File "D:\dataset\portfolio_chatbot_env\lib\site-packages\faiss\swigfaiss_avx2.py", line 10812, in read_index
+    return _swigfaiss_avx2.read_index(*args)
+RuntimeError: Error in __cdecl faiss::FileIOReader::FileIOReader(const char *) at D:\a\faiss-wheels\faiss-wheels\faiss\faiss\impl\io.cpp:68: Error: 'f' failed: could not open vector_db\index.faiss for reading: No such file or directory
+
+2025-04-19 13:23:03,417 - __main__ - ERROR - 컨텍스트 검색 중 오류 발생: 
+2025-04-19 13:23:03,458 - __main__ - ERROR - Traceback (most recent call last):
+  File "C:\Users\gnssl\OneDrive\Documents\GitHub\Portfolio_chat_bot_v2\test_ragmodel.py", line 464, in find_relevant_context
+    docs_and_scores = vectorstore.similarity_search_with_score(
+  File "D:\dataset\portfolio_chatbot_env\lib\site-packages\langchain_community\vectorstores\faiss.py", line 516, in similarity_search_with_score
+    docs = self.similarity_search_with_score_by_vector(
+  File "D:\dataset\portfolio_chatbot_env\lib\site-packages\langchain_community\vectorstores\faiss.py", line 417, in similarity_search_with_score_by_vector
+    scores, indices = self.index.search(vector, k if filter is None else fetch_k)
+  File "D:\dataset\portfolio_chatbot_env\lib\site-packages\faiss\class_wrappers.py", line 329, in replacement_search
+    assert d == self.d
+AssertionError
+
+2025-04-19 13:23:13,921 - __main__ - ERROR - 컨텍스트 검색 중 오류 발생: 
+2025-04-19 13:23:13,921 - __main__ - ERROR - Traceback (most recent call last):
+  File "C:\Users\gnssl\OneDrive\Documents\GitHub\Portfolio_chat_bot_v2\test_ragmodel.py", line 464, in find_relevant_context
+    docs_and_scores = vectorstore.similarity_search_with_score(
+  File "D:\dataset\portfolio_chatbot_env\lib\site-packages\langchain_community\vectorstores\faiss.py", line 516, in similarity_search_with_score
+    docs = self.similarity_search_with_score_by_vector(
+  File "D:\dataset\portfolio_chatbot_env\lib\site-packages\langchain_community\vectorstores\faiss.py", line 417, in similarity_search_with_score_by_vector
+    scores, indices = self.index.search(vector, k if filter is None else fetch_k)
+  File "D:\dataset\portfolio_chatbot_env\lib\site-packages\faiss\class_wrappers.py", line 329, in replacement_search
+    assert d == self.d
+AssertionError
+
+2025-04-19 13:27:17,249 - __main__ - ERROR - 컨텍스트 검색 중 오류 발생: 
+2025-04-19 13:27:17,282 - __main__ - ERROR - Traceback (most recent call last):
+  File "C:\Users\gnssl\OneDrive\Documents\GitHub\Portfolio_chat_bot_v2\test_ragmodel.py", line 466, in find_relevant_context
+    docs_and_scores = vectorstore.similarity_search_with_score(
+  File "D:\dataset\portfolio_chatbot_env\lib\site-packages\langchain_community\vectorstores\faiss.py", line 516, in similarity_search_with_score
+    docs = self.similarity_search_with_score_by_vector(
+  File "D:\dataset\portfolio_chatbot_env\lib\site-packages\langchain_community\vectorstores\faiss.py", line 417, in similarity_search_with_score_by_vector
+    scores, indices = self.index.search(vector, k if filter is None else fetch_k)
+  File "D:\dataset\portfolio_chatbot_env\lib\site-packages\faiss\class_wrappers.py", line 329, in replacement_search
+    assert d == self.d
+AssertionError
+
+2025-04-19 13:27:28,180 - __main__ - ERROR - 컨텍스트 검색 중 오류 발생: 
+2025-04-19 13:27:28,181 - __main__ - ERROR - Traceback (most recent call last):
+  File "C:\Users\gnssl\OneDrive\Documents\GitHub\Portfolio_chat_bot_v2\test_ragmodel.py", line 466, in find_relevant_context
+    docs_and_scores = vectorstore.similarity_search_with_score(
+  File "D:\dataset\portfolio_chatbot_env\lib\site-packages\langchain_community\vectorstores\faiss.py", line 516, in similarity_search_with_score
+    docs = self.similarity_search_with_score_by_vector(
+  File "D:\dataset\portfolio_chatbot_env\lib\site-packages\langchain_community\vectorstores\faiss.py", line 417, in similarity_search_with_score_by_vector
+    scores, indices = self.index.search(vector, k if filter is None else fetch_k)
+  File "D:\dataset\portfolio_chatbot_env\lib\site-packages\faiss\class_wrappers.py", line 329, in replacement_search
+    assert d == self.d
+AssertionError
+
+2025-04-19 13:34:51,955 - __main__ - ERROR - 컨텍스트 검색 중 오류 발생: 
+2025-04-19 13:34:51,956 - __main__ - ERROR - Traceback (most recent call last):
+  File "C:\Users\gnssl\OneDrive\Documents\GitHub\Portfolio_chat_bot_v2\test_ragmodel.py", line 472, in find_relevant_context
+    docs_and_scores = vectorstore.similarity_search_with_score(
+  File "D:\dataset\portfolio_chatbot_env\lib\site-packages\langchain_community\vectorstores\faiss.py", line 516, in similarity_search_with_score
+    docs = self.similarity_search_with_score_by_vector(
+  File "D:\dataset\portfolio_chatbot_env\lib\site-packages\langchain_community\vectorstores\faiss.py", line 417, in similarity_search_with_score_by_vector
+    scores, indices = self.index.search(vector, k if filter is None else fetch_k)
+  File "D:\dataset\portfolio_chatbot_env\lib\site-packages\faiss\class_wrappers.py", line 329, in replacement_search
+    assert d == self.d
+AssertionError
+
+2025-04-19 13:35:09,444 - __main__ - ERROR - 컨텍스트 검색 중 오류 발생: 
+2025-04-19 13:35:09,446 - __main__ - ERROR - Traceback (most recent call last):
+  File "C:\Users\gnssl\OneDrive\Documents\GitHub\Portfolio_chat_bot_v2\test_ragmodel.py", line 472, in find_relevant_context
+    docs_and_scores = vectorstore.similarity_search_with_score(
+  File "D:\dataset\portfolio_chatbot_env\lib\site-packages\langchain_community\vectorstores\faiss.py", line 516, in similarity_search_with_score
+    docs = self.similarity_search_with_score_by_vector(
+  File "D:\dataset\portfolio_chatbot_env\lib\site-packages\langchain_community\vectorstores\faiss.py", line 417, in similarity_search_with_score_by_vector
+    scores, indices = self.index.search(vector, k if filter is None else fetch_k)
+  File "D:\dataset\portfolio_chatbot_env\lib\site-packages\faiss\class_wrappers.py", line 329, in replacement_search
+    assert d == self.d
+AssertionError
+
+2025-04-19 13:38:58,816 - __main__ - ERROR - 벡터 데이터베이스 생성 중 오류 발생: 'SentenceTransformer' object has no attribute 'embed_documents'
+2025-04-19 13:38:58,828 - __main__ - ERROR - Traceback (most recent call last):
+  File "C:\Users\gnssl\OneDrive\Documents\GitHub\Portfolio_chat_bot_v2\test_ragmodel.py", line 434, in create_vector_database
+    vectorstore = FAISS.from_texts(
+  File "D:\dataset\portfolio_chatbot_env\lib\site-packages\langchain_community\vectorstores\faiss.py", line 1043, in from_texts
+    embeddings = embedding.embed_documents(texts)
+  File "D:\dataset\portfolio_chatbot_env\lib\site-packages\torch\nn\modules\module.py", line 1928, in __getattr__
+    raise AttributeError(
+AttributeError: 'SentenceTransformer' object has no attribute 'embed_documents'
+

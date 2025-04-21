@@ -18,19 +18,43 @@ import glob
 import fitz  # PyMuPDF
 import PyPDF2  # 백업용
 import json
-from typing import List, Tuple, Dict
+from typing import List, Tuple, Dict, Optional
 import nltk
 from nltk.tokenize import sent_tokenize
 from peft import PeftModel, PeftConfig
 from langchain_community.vectorstores import FAISS
-from langchain_community.embeddings import HuggingFaceEmbeddings
+from langchain_community.embeddings.huggingface import HuggingFaceEmbeddings
 from transformers import pipeline
+import spacy
+from concurrent.futures import ThreadPoolExecutor
+import gc
+import logging
+
+# 로깅 설정
+logging.basicConfig(level=logging.INFO)
+logger = logging.getLogger(__name__)
+
+# 파일 핸들러 추가 (로그를 파일에도 저장)
+file_handler = logging.FileHandler('training.log')
+file_handler.setLevel(logging.INFO)
+formatter = logging.Formatter('%(asctime)s - %(name)s - %(levelname)s - %(message)s')
+file_handler.setFormatter(formatter)
+logger.addHandler(file_handler)
 
 # NLTK 데이터 다운로드
 try:
     nltk.data.find('tokenizers/punkt')
 except LookupError:
     nltk.download('punkt')
+
+# spaCy 모델 로드
+try:
+    nlp = spacy.load('ko_core_news_sm', disable=['ner', 'tagger', 'parser'])
+    nlp.add_pipe('sentencizer')
+except OSError:
+    spacy.cli.download('ko_core_news_sm')
+    nlp = spacy.load('ko_core_news_sm', disable=['ner', 'tagger', 'parser'])
+    nlp.add_pipe('sentencizer')
 
 # 환경 변수 로드
 load_dotenv()
@@ -67,6 +91,18 @@ qa_model = qa_model.to(device)
 ko_en_model = ko_en_model.to(device)
 en_ko_model = en_ko_model.to(device)
 
+# 토크나이저 정의
+tokenizer = AutoTokenizer.from_pretrained("google/flan-t5-large")
+
+# 임베딩 모델 이름 상수 추가
+EMBEDDING_MODEL_NAME = "intfloat/multilingual-e5-large"
+EMBEDDING_DEVICE = "cuda"
+
+def get_token_length(text: str, tokenizer=None) -> int:
+    """텍스트의 토큰 길이를 반환합니다."""
+    tokenizer = tokenizer or AutoTokenizer.from_pretrained("google/flan-t5-large")
+    return len(tokenizer(text)["input_ids"])
+
 def get_answer(
     question: str,
     model,
@@ -79,68 +115,76 @@ def get_answer(
 ) -> str:
     """질문에 대한 답변을 생성합니다."""
     try:
-        # 언어 검증 로깅
+        # 원본 질문 언어 확인 및 저장
+        is_question_korean = is_korean(question)
+        is_question_english = is_english(question)
+        
         print("\n[언어 검증]")
         print("Q:", question)
-        print("is_korean:", is_korean(question))
-        print("is_english:", is_english(question))
+        print("is_korean:", is_question_korean)
+        print("is_english:", is_question_english)
         
-        # 컨텍스트가 제공되지 않은 경우 관련 컨텍스트 검색
+        # 영어 질문을 한국어로 번역 (컨텍스트 검색용)
+        working_question = question
+        if is_question_english:
+            print("\n[번역] 영어 -> 한국어 (컨텍스트 검색용)")
+            working_question = translate_text(question, en_ko_model, en_ko_tokenizer)
+            print("번역된 질문:", working_question)
+        
+        # 컨텍스트 검색 및 처리
         if context is None:
-            context = find_relevant_context(question)
-            if not context:
-                context = get_default_context(question)
+            try:
+                print("\n[컨텍스트 검색]")
+                context = find_relevant_context(working_question)
+                if not context or not context.strip():
+                    print("벡터 검색 실패 → 기본 컨텍스트 사용")
+                    context = get_default_context(working_question)
+            except Exception as e:
+                print(f"컨텍스트 검색 중 오류 발생: {str(e)} → 기본 컨텍스트 사용")
+                context = get_default_context(working_question)
         
-        # 컨텍스트를 문장 단위로 분할
-        sentences = sent_tokenize(context)
+        print("\n[컨텍스트 미리보기]")
+        print(context[:300] + "..." if len(context) > 300 else context)
         
-        # 각 문장의 중요도 평가
-        sentence_scores = []
-        for sentence in sentences:
-            # 문장과 질문의 길이를 고려한 점수 계산
-            score = len(sentence.split()) / (len(question.split()) + 1)
-            sentence_scores.append((sentence, score))
+        # 컨텍스트를 영어로 번역
+        print("\n[컨텍스트 번역] 한국어 -> 영어")
+        english_context = translate_text(context, ko_en_model, ko_en_tokenizer)
+        print("번역된 컨텍스트:", english_context[:300] + "..." if len(english_context) > 300 else english_context)
         
-        # 점수가 높은 순서로 정렬
-        sentence_scores.sort(key=lambda x: x[1], reverse=True)
+        # 컨텍스트 길이 제한
+        MAX_CONTEXT_TOKENS = 350
+        print("\n[컨텍스트 길이 제한]")
+        print(f"원본 컨텍스트 토큰 수: {get_token_length(english_context)}")
+        context_inputs = tokenizer(english_context, return_tensors="pt", truncation=True, max_length=MAX_CONTEXT_TOKENS)
+        english_context = tokenizer.decode(context_inputs['input_ids'][0], skip_special_tokens=True)
+        print(f"제한된 컨텍스트 토큰 수: {get_token_length(english_context)}")
         
-        # 상위 문장들을 선택하여 컨텍스트 구성
-        selected_sentences = []
-        current_length = 0
-        MAX_TOKENS = 384  # FLAN-T5용
+        # 질문을 영어로 번역 (QA 모델 입력용)
+        if is_question_korean:
+            print("\n[번역] 한국어 -> 영어 (QA 모델용)")
+            english_question = translate_text(question, ko_en_model, ko_en_tokenizer)
+            print("번역된 질문:", english_question)
+        else:
+            english_question = question
         
-        for sentence, _ in sentence_scores:
-            # 현재 문장을 추가했을 때의 토큰 수 예측
-            test_context = ' '.join(selected_sentences + [sentence])
-            test_inputs = tokenizer(test_context, return_tensors="pt", truncation=True, max_length=MAX_TOKENS)
-            
-            if len(test_inputs['input_ids'][0]) <= MAX_TOKENS:
-                selected_sentences.append(sentence)
-            else:
-                break
-        
-        # 선택된 문장들로 컨텍스트 재구성
-        context = ' '.join(selected_sentences)
-        
-        # 질문이 영어인 경우 한국어로 번역
-        if not is_korean(question):
-            print("\n[번역] 영어 -> 한국어")
-            translated_question = translate_text(question, ko_en_model, ko_en_tokenizer)
-            print("번역된 질문:", translated_question)
-            question = translated_question
-        
-        # 프롬프트 생성
-        prompt = f"""You are an AI assistant. Based on the context below, answer the question as clearly and concisely as possible.
+        # 영어 프롬프트 생성
+        prompt = f"""You are a helpful assistant answering questions about a portfolio.
+
+Based on the following context, answer the question clearly and specifically.
 
 Context:
-{context}
+{english_context}
 
 Question:
-{question}
+{english_question}
 
 Answer:"""
         
-        # 답변 생성
+        print("\n[PROMPT PREVIEW]")
+        print(prompt[:300] + "..." if len(prompt) > 300 else prompt)
+        print(f"\n프롬프트 토큰 수: {get_token_length(prompt)}")
+        
+        # 답변 생성 (영어로)
         inputs = tokenizer(prompt, return_tensors="pt").to(device)
         outputs = model.generate(
             **inputs,
@@ -148,23 +192,29 @@ Answer:"""
             num_beams=5,
             no_repeat_ngram_size=2,
             temperature=0.7,
+            do_sample=True,
             top_p=0.9,
-            do_sample=True
+            early_stopping=True
         )
         
-        answer = tokenizer.decode(outputs[0], skip_special_tokens=True)
+        english_answer = tokenizer.decode(outputs[0], skip_special_tokens=True)
+        print("\n[생성된 영어 답변]")
+        print(english_answer)
         
-        # 원래 질문이 영어였다면 답변을 영어로 번역
-        if not is_korean(question):
-            print("\n[번역] 한국어 -> 영어")
-            print("번역 전 답변:", answer)
-            answer = translate_text(answer, en_ko_model, en_ko_tokenizer)
-            print("번역 후 답변:", answer)
+        # 답변을 원본 질문 언어로 번역
+        if is_question_korean:
+            print("\n[번역] 영어 -> 한국어")
+            answer = translate_text(english_answer, en_ko_model, en_ko_tokenizer)
+            print("번역된 답변:", answer)
+        else:
+            answer = english_answer
         
         return answer
         
     except Exception as e:
         print(f"답변 생성 중 오류 발생: {str(e)}")
+        import traceback
+        print(traceback.format_exc())
         return "죄송합니다. 답변을 생성하는 중에 오류가 발생했습니다."
 
 def load_portfolio_data():
@@ -246,194 +296,230 @@ def clean_text(text):
     text = text.strip()
     return text
 
-def create_vector_database(texts, embedding_model=None):
-    """벡터 데이터베이스를 생성합니다."""
-    try:
-        print("\n벡터 DB 생성 중...")
-        
-        # 임베딩 모델 로드
-        if embedding_model is None:
-            print("임베딩 모델 로드 중...")
-            embedding_model = SentenceTransformer('intfloat/multilingual-e5-large')
-        
-        # 텍스트를 청크로 분할
-        print("텍스트 청크 생성 중...")
-        chunks = []
-        for i, text in enumerate(texts):
-            print(f"텍스트 {i+1}/{len(texts)} 처리 중...")
-            text_chunks = create_chunks(text)
-            print(f"텍스트 {i+1}에서 {len(text_chunks)}개의 청크 생성됨")
-            chunks.extend(text_chunks)
-        
-        print(f"생성된 총 청크 수: {len(chunks)}")
-        if not chunks:
-            print("경고: 생성된 청크가 없습니다!")
+def is_chunk_valid(chunk: str) -> bool:
+    """청크의 유효성을 검사합니다."""
+    # 기본 검사
+    if not chunk or not chunk.strip():
+        return False
+    
+    # 단어 수가 너무 적은 경우 제외
+    if len(chunk.split()) < 10:
+        return False
+    
+    # 모두 대문자인 경우 제외 (헤더나 메타데이터일 가능성)
+    if chunk.isupper():
+        return False
+    
+    # URL 포함 청크는 제외
+    if 'http' in chunk or 'www.' in chunk:
+        return False
+    
+    # 숫자 비율이 너무 높은 경우 제외 (ex. 성적표)
+    digit_ratio = len([c for c in chunk if c.isdigit()]) / len(chunk)
+    if digit_ratio > 0.5:  # 50% 이상이 숫자면 제외
+        return False
+    
+    # 특수문자나 숫자가 과도하게 많은 경우 제외
+    special_char_ratio = len([c for c in chunk if not c.isalnum() and not c.isspace()]) / len(chunk)
+    if special_char_ratio > 0.3:  # 30% 이상이 특수문자면 제외
+        return False
+    
+    # 한글이나 영어 문자가 너무 적은 경우 제외
+    text_char_ratio = len([c for c in chunk if c.isalpha()]) / len(chunk)
+    if text_char_ratio < 0.5:  # 50% 미만이 텍스트면 제외
             return False
             
-        # 청크 품질 검사
-        print("\n청크 품질 검사 중...")
-        filtered_chunks = []
-        for i, chunk in enumerate(chunks):
-            # 최소 길이 확인
-            if len(chunk) < 100:
+    # 디버깅을 위한 비율 출력
+    if logger.isEnabledFor(logging.DEBUG):
+        logger.debug(f"\n[청크 검증 정보]")
+        logger.debug(f"청크 길이: {len(chunk)}")
+        logger.debug(f"단어 수: {len(chunk.split())}")
+        logger.debug(f"숫자 비율: {digit_ratio:.2f}")
+        logger.debug(f"특수문자 비율: {special_char_ratio:.2f}")
+        logger.debug(f"텍스트 비율: {text_char_ratio:.2f}")
+        if digit_ratio > 0.3:  # 숫자가 30% 이상인 경우 내용 출력
+            logger.debug(f"높은 숫자 비율 청크: {chunk[:100]}...")
+    
+    return True
+
+def create_chunks(text: str, chunk_size: int = 300, overlap: int = 50) -> List[str]:
+    """텍스트를 토큰 기반 청크로 분할하는 최적화된 함수"""
+    if not text or not text.strip():
+        return []
+    
+    # 문장 분리
+    doc = nlp(text)
+    sentences = [str(sent).strip() for sent in doc.sents]
+    
+    chunks = []
+    current_chunk = []
+    current_size = 0
+    
+    for sentence in sentences:
+        # 토큰 길이 계산
+        sentence_tokens = get_token_length(sentence)
+        
+        if current_size + sentence_tokens > chunk_size and current_chunk:
+            # 청크 생성
+            chunk_text = ' '.join(current_chunk)
+            # 유효성 검사 후 추가
+            if is_chunk_valid(chunk_text):
+                chunks.append(chunk_text)
+            
+            # 오버랩을 위해 마지막 부분 유지
+            overlap_size = 0
+            overlap_chunk = []
+            for sent in reversed(current_chunk):
+                sent_tokens = get_token_length(sent)
+                if overlap_size + sent_tokens > overlap:
+                    break
+                overlap_chunk.insert(0, sent)
+                overlap_size += sent_tokens
+            
+            current_chunk = overlap_chunk
+            current_size = overlap_size
+        
+        current_chunk.append(sentence)
+        current_size += sentence_tokens
+    
+    # 마지막 청크 처리
+    if current_chunk:
+        chunk_text = ' '.join(current_chunk)
+        if is_chunk_valid(chunk_text):
+            chunks.append(chunk_text)
+    
+    # 청크 생성 정보 출력
+    print(f"\n[청크 생성 정보]")
+    print(f"총 청크 수: {len(chunks)}")
+    for i, chunk in enumerate(chunks):
+        chunk_tokens = get_token_length(chunk)
+        print(f"청크 {i+1}: {chunk_tokens} 토큰, {len(chunk.split())} 단어")
+    
+    # 메모리 정리
+    gc.collect()
+    
+    return chunks
+
+def create_vector_database(texts: List[str], embedding_model: HuggingFaceEmbeddings) -> Optional[FAISS]:
+    """벡터 데이터베이스를 생성합니다."""
+    try:
+        print("\n[벡터 데이터베이스 생성]")
+        print(f"임베딩 모델: {embedding_model.model_name}")
+        
+        if not texts:
+            print("경고: 입력 텍스트가 없습니다.")
+            return None
+            
+        # 청크 생성 및 필터링
+        print("텍스트 청크 생성 중...")
+        chunks = []
+        for i, text in enumerate(texts, 1):
+            if not text or not isinstance(text, str):
+                print(f"경고: 텍스트 {i}가 비어있거나 문자열이 아닙니다. 건너뜁니다.")
                 continue
-            # 대문자로만 된 텍스트 제외
-            if chunk.isupper():
+                
+            try:
+                text_chunks = create_chunks(text)
+                valid_chunks = [chunk for chunk in text_chunks if is_chunk_valid(chunk)]
+                chunks.extend(valid_chunks)
+                print(f"텍스트 {i}: {len(valid_chunks)}개의 유효한 청크 생성")
+            except Exception as e:
+                print(f"텍스트 {i} 청크 생성 중 오류 발생: {str(e)}")
                 continue
-            # 특수 문자가 과도하게 많은 텍스트 제외
-            if len(re.findall(r'[^\w\s가-힣]', chunk)) / len(chunk) > 0.3:
-                continue
-            filtered_chunks.append(chunk)
-            if (i + 1) % 100 == 0:
-                print(f"청크 {i+1}/{len(chunks)} 검사 완료")
         
-        chunks = filtered_chunks
-        print(f"필터링 후 청크 수: {len(chunks)}")
+        if not chunks:
+            print("경고: 유효한 청크가 없습니다.")
+            return None
+            
+        print(f"총 청크 수: {len(chunks)}")
         
-        # 임베딩 생성 (배치 처리)
-        print("\n임베딩 생성 중...")
-        batch_size = 32
-        embeddings = []
-        for i in range(0, len(chunks), batch_size):
-            batch = chunks[i:i+batch_size]
-            print(f"배치 {i//batch_size + 1}/{(len(chunks)-1)//batch_size + 1} 처리 중...")
-            batch_embeddings = embedding_model.encode(batch, show_progress_bar=True)
-            embeddings.append(batch_embeddings)
-        
-        embeddings = np.vstack(embeddings)
-        print(f"생성된 임베딩 shape: {embeddings.shape}")
-        
-        # FAISS 인덱스 생성
-        print("\nFAISS 인덱스 생성 중...")
-        dimension = embeddings.shape[1]
-        index = faiss.IndexFlatL2(dimension)
-        index.add(embeddings.astype('float32'))
-        
-        # Langchain FAISS 벡터 스토어 생성
-        print("\nLangchain FAISS 벡터 스토어 생성 중...")
-        embeddings_hf = HuggingFaceEmbeddings(model_name='intfloat/multilingual-e5-large')
-        texts_metadata = [{"source": f"chunk_{i}"} for i in range(len(chunks))]
-        db = FAISS.from_texts(chunks, embeddings_hf, metadatas=texts_metadata)
-        
-        # 저장
-        print("\n벡터 DB 저장 중...")
-        os.makedirs(VECTOR_DB_PATH, exist_ok=True)
-        faiss.write_index(index, os.path.join(VECTOR_DB_PATH, "faiss.index"))
-        with open(os.path.join(VECTOR_DB_PATH, "chunks.pkl"), 'wb') as f:
-            pickle.dump(chunks, f)
-        
-        # Langchain FAISS 벡터 스토어 저장
-        db.save_local(os.path.join(VECTOR_DB_PATH, "langchain_faiss"))
-        
-        print("벡터 DB 생성 완료!")
-        return True
-        
+        # 벡터 스토어 생성
+        try:
+            print("FAISS 벡터 스토어 생성 중...")
+            vectorstore = FAISS.from_texts(
+                texts=chunks,
+                embedding=embedding_model
+            )
+            
+            # 벡터 스토어 저장
+            print(f"벡터 스토어를 {VECTOR_DB_PATH}에 저장 중...")
+            vectorstore.save_local(VECTOR_DB_PATH)
+            print("벡터 데이터베이스 생성 완료")
+            return vectorstore
+            
+        except Exception as e:
+            print(f"FAISS 벡터 스토어 생성/저장 중 오류: {str(e)}")
+            raise
+            
     except Exception as e:
-        print(f"벡터 DB 생성 중 오류 발생: {str(e)}")
+        print(f"벡터 데이터베이스 생성 중 오류 발생: {str(e)}")
         import traceback
         print(traceback.format_exc())
-        return False
+        return None
 
-def find_relevant_context(question: str, top_k: int = 10, threshold: float = 0.5) -> str:
+def find_relevant_context(question: str, top_k: int = 5) -> str:
     """질문과 관련된 컨텍스트를 찾습니다."""
     try:
-        # 벡터 DB 파일 경로 확인
-        vector_db_path = os.path.join(VECTOR_DB_PATH, "faiss.index")
-        chunks_path = os.path.join(VECTOR_DB_PATH, "chunks.pkl")
-        langchain_db_path = os.path.join(VECTOR_DB_PATH, "langchain_faiss")
-        
-        if not os.path.exists(vector_db_path) or not os.path.exists(chunks_path):
-            print("벡터 DB 파일이 없습니다.")
+        if not question.strip():
+            print("질문이 비어있습니다.")
+            return ""
+            
+        if not os.path.exists(VECTOR_DB_PATH):
+            print(f"벡터 데이터베이스를 찾을 수 없습니다: {VECTOR_DB_PATH}")
             return ""
             
         # 임베딩 모델 로드
-        embedding_model = SentenceTransformer('intfloat/multilingual-e5-large')
-        embeddings_hf = HuggingFaceEmbeddings(model_name='intfloat/multilingual-e5-large')
+        embedding_model = HuggingFaceEmbeddings(
+            model_name=EMBEDDING_MODEL_NAME,
+            model_kwargs={"device": EMBEDDING_DEVICE},
+            encode_kwargs={"normalize_embeddings": True}
+        )
         
-        # 인덱스와 청크 로드
-        index = faiss.read_index(vector_db_path)
-        with open(chunks_path, 'rb') as f:
-            chunks = pickle.load(f)
-        
-        # Langchain FAISS 벡터 스토어 로드
-        if os.path.exists(langchain_db_path):
-            db = FAISS.load_local(
-                folder_path=langchain_db_path,
-                embeddings=embeddings_hf,
-                allow_dangerous_deserialization=True
+        try:
+            # allow_dangerous_deserialization 파라미터 추가
+            vectorstore = FAISS.load_local(
+                VECTOR_DB_PATH, 
+                embedding_model,
+                allow_dangerous_deserialization=True  # 추가
             )
-        else:
-            print("Langchain FAISS 벡터 스토어가 없습니다. 기본 검색을 사용합니다.")
-            db = None
-        
-        # 질문 임베딩
-        question_embedding = embedding_model.encode([question], normalize_embeddings=True)
-        
-        # 유사도 검색
-        distances, indices = index.search(question_embedding.astype('float32'), top_k)
-        
-        # 디버깅 로그 추가
-        print(f"[DEBUG] Top-k 검색 인덱스: {indices}")
-        
-        # 가장 관련성 높은 청크들 결합
-        relevant_chunks = []
-        similarity_scores = []
-        
-        for i, (dist, idx) in enumerate(zip(distances[0], indices[0])):
-            if idx >= len(chunks):  # 인덱스 범위 체크
-                continue
-                
-            similarity_score = 1 - dist/2  # L2 거리를 유사도 점수로 변환
-            if similarity_score < threshold:
-                continue
-                
-            relevant_chunks.append(chunks[idx])
-            similarity_scores.append(similarity_score)
-        
-        # 디버깅 로그 추가
-        print(f"[DEBUG] 초기 관련 청크:\n{relevant_chunks}")
-        
-        if not relevant_chunks:
-            print("관련성 높은 컨텍스트를 찾을 수 없습니다.")
+        except Exception as e:
+            print(f"벡터 스토어 로드 실패: {str(e)}")
             return ""
         
-        # MMR 적용
-        if len(relevant_chunks) > 1:
-            print("\n[MMR 적용 중]")
-            candidate_embeddings = embedding_model.encode(relevant_chunks)
-            relevant_chunks = mmr_rerank(question_embedding[0], candidate_embeddings, relevant_chunks, k=min(top_k, len(relevant_chunks)))
-            print(f"MMR 적용 후 청크 수: {len(relevant_chunks)}")
-            print(f"[DEBUG] MMR 적용 후 청크:\n{relevant_chunks}")
-        
-        # Re-ranking 적용 (reranker 모델이 있는 경우에만)
+        # 유사도 검색
         try:
-            reranker_model = AutoModelForSequenceClassification.from_pretrained(RERANKER_MODEL)
-            reranker_tokenizer = AutoTokenizer.from_pretrained(RERANKER_MODEL)
-            device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
-            reranker_model = reranker_model.to(device)
-            
-            relevant_chunks = rerank_contexts(
-                question, 
-                relevant_chunks, 
-                reranker_model, 
-                reranker_tokenizer,
-                device
-            )
-            print(f"[DEBUG] Re-ranking 적용 후 청크:\n{relevant_chunks}")
+            print("유사도 검색 수행 중...")
+            docs = vectorstore.similarity_search_with_score(question, k=top_k)
         except Exception as e:
-            print(f"Re-ranking 적용 중 오류 발생: {str(e)}")
+            print(f"유사도 검색 실패: {str(e)}")
+            return ""
+            
+        if not docs:
+            print("관련 문서를 찾을 수 없습니다.")
+            return ""
+            
+        # 문서 내용과 유사도 점수 결합
+        print("\n[검색 결과]")
+        contexts = []
+        for i, (doc, score) in enumerate(docs, 1):
+            print(f"문서 {i} (유사도 점수: {score:.4f})")
+            if score < 1.5:  # 유사도 점수가 좋은 문서만 선택
+                contexts.append(doc.page_content)
+                print("- 선택됨")
+            else:
+                print("- 유사도 점수가 너무 낮아 제외됨")
         
-        print(f"찾은 컨텍스트 수: {len(relevant_chunks)}")
-        if similarity_scores:
-            print(f"최고 유사도 점수: {max(similarity_scores):.4f}")
-        
-        # 관련 청크 결합
-        combined_context = " ".join(relevant_chunks)
-        print("\n[DEBUG] 최종 선택된 컨텍스트:\n", combined_context)
-        return combined_context
+        if not contexts:
+            print("유사도 기준을 만족하는 문서가 없습니다.")
+            return ""
+            
+        print(f"\n선택된 문서 수: {len(contexts)}")
+        return " ".join(contexts)
         
     except Exception as e:
         print(f"컨텍스트 검색 중 오류 발생: {str(e)}")
+        import traceback
+        print(traceback.format_exc())
         return ""
 
 def mmr_rerank(query_embedding, candidate_embeddings, candidates, k=5, lambda_param=0.5):
@@ -478,16 +564,22 @@ def get_default_context(question: str) -> str:
         return "죄송합니다. 관련 정보를 찾을 수 없습니다."
 
 def is_korean(text: str) -> bool:
-    """텍스트가 한국어인지 확인합니다."""
-    # 한글 유니코드 범위: AC00-D7A3 (가-힣)
-    korean_ratio = len([c for c in text if '\uAC00' <= c <= '\uD7A3']) / len(text) if text else 0
-    return korean_ratio > 0.3  # 30% 이상이 한글이면 한국어로 판단
+    """텍스트가 한국어인지 판단합니다.
+    한글 비율이 30% 이상이면 한국어로 간주합니다."""
+    if not text or not isinstance(text, str):
+        return False
+    korean_ratio = sum('\uAC00' <= c <= '\uD7A3' for c in text) / len(text)
+    return korean_ratio > 0.3
 
 def is_english(text: str) -> bool:
-    """텍스트가 영어인지 확인합니다."""
-    # 영어 문자와 공백만 포함된지 확인
-    english_ratio = len([c for c in text if c.isalpha() or c.isspace()]) / len(text) if text else 0
-    return english_ratio > 0.8  # 80% 이상이 영어 문자면 영어로 판단
+    """텍스트가 영어인지 판단합니다.
+    한글이 아니면서 알파벳과 공백 비율이 80% 이상이면 영어로 간주합니다."""
+    if not text or not isinstance(text, str):
+        return False
+    if is_korean(text):  # 한글로 판단되면 영어로 간주하지 않음
+        return False
+    english_ratio = sum(c.isalpha() or c.isspace() for c in text) / len(text)
+    return english_ratio > 0.8
 
 def rerank_contexts(question: str, contexts: List[str], model, tokenizer, device, top_k: int = 5) -> List[str]:
     """Re-ranking 모델을 사용하여 컨텍스트를 재순위화합니다."""
@@ -519,43 +611,84 @@ def rerank_contexts(question: str, contexts: List[str], model, tokenizer, device
         print(f"Re-ranking 중 오류 발생: {str(e)}")
         return contexts  # 오류 발생 시 원래 컨텍스트 반환
 
-def create_chunks(text: str, chunk_size: int = 1000, overlap: int = 200) -> List[str]:
-    """텍스트를 청크로 분할합니다."""
-    chunks = []
-    start = 0
-    text_length = len(text)
-    
-    while start < text_length:
-        end = start + chunk_size
-        if end > text_length:
-            end = text_length
+def translate_text(text: str, model, tokenizer) -> str:
+    """텍스트를 번역합니다."""
+    try:
+        # 입력 텍스트가 비어있는 경우
+        if not text or not text.strip():
+            return text
         
-        # 청크 추출
-        chunk = text[start:end]
+        # 한->영 또는 영->한 설정
+        if is_korean(text):
+            tokenizer.src_lang = "ko_KR"
+            tokenizer.tgt_lang = "en_XX"
+            forced_bos_token_id = tokenizer.lang_code_to_id["en_XX"]
+        else:
+            tokenizer.src_lang = "en_XX"
+            tokenizer.tgt_lang = "ko_KR"
+            forced_bos_token_id = tokenizer.lang_code_to_id["ko_KR"]
         
-        # 문장 단위로 자르기
-        sentences = sent_tokenize(chunk)
-        if sentences:
-            # 마지막 문장이 중간에 잘린 경우, 이전 문장까지만 포함
-            if end < text_length and not text[end:end+1].isspace():
-                chunks.append(' '.join(sentences[:-1]))
-                start = end - len(sentences[-1])
-            else:
-                chunks.append(' '.join(sentences))
-                start = end - overlap
+        # 디버깅 정보 출력
+        print(f"\n[번역 설정]")
+        print(f"원본 텍스트: {text[:100]}...")
+        print(f"원본 언어: {tokenizer.src_lang}")
+        print(f"목표 언어: {tokenizer.tgt_lang}")
+        print(f"forced_bos_token_id: {forced_bos_token_id}")
         
-    return chunks
+        # 텍스트 토큰화
+        inputs = tokenizer(
+            text, 
+            return_tensors="pt", 
+            truncation=True, 
+            max_length=512,
+            padding=True
+        ).to(device)
+        
+        # 번역 생성
+        with torch.no_grad():
+            generated_tokens = model.generate(
+                **inputs,
+                forced_bos_token_id=forced_bos_token_id,
+                max_length=512,
+                num_beams=5,
+                length_penalty=1.0,
+                temperature=0.3,
+                do_sample=False,
+                no_repeat_ngram_size=3,
+                early_stopping=True
+            )
+        
+        # 번역 결과 디코딩
+        result = tokenizer.decode(generated_tokens[0], skip_special_tokens=True)
+        
+        print(f"번역 결과: {result[:100]}...")
+        
+        return result
+        
+    except Exception as e:
+        print(f"번역 중 오류 발생: {str(e)}")
+        import traceback
+        print(traceback.format_exc())
+        return text  # 오류 발생 시 원본 텍스트 반환
 
 def main():
     """메인 함수"""
     try:
-        # 임베딩 모델 로드
-        embedding_model = SentenceTransformer('intfloat/multilingual-e5-large')
-
+        # 임베딩 모델 초기화
+        print("\n[초기화]")
+        print("임베딩 모델 초기화 중...")
+        embedding_model = HuggingFaceEmbeddings(
+            model_name=EMBEDDING_MODEL_NAME,
+            model_kwargs={"device": "cuda"},
+            encode_kwargs={"normalize_embeddings": True}
+        )
+        print("임베딩 모델 초기화 완료")
+        
         # 포트폴리오 데이터 로드 및 벡터 데이터베이스 생성
-        print("\n포트폴리오 데이터 로드 중...")
+        print("\n[데이터 로드]")
         portfolio_texts = load_portfolio_data()
         if portfolio_texts:
+            print(f"포트폴리오 텍스트 {len(portfolio_texts)}개 로드됨")
             create_vector_database(portfolio_texts, embedding_model)
         else:
             print("포트폴리오 데이터를 찾을 수 없습니다. 기본 컨텍스트를 사용합니다.")
@@ -568,7 +701,10 @@ def main():
             "학력 및 자격증을 말해주세요."
         ]
 
-        # 각 질문에 대해 답변 생성
+        # 질문과 답변 결과를 저장할 리스트
+        results = []
+
+        # 각 질문에 대해 답변 생성 및 저장
         for i, question in enumerate(test_questions, 1):
             print(f"\n[질문 {i}/{len(test_questions)}]")
             print(f"Q: {question}")
@@ -585,31 +721,29 @@ def main():
                     en_ko_tokenizer
                 )
                 print(f"A: {answer}")
+                results.append((question, answer))
             except Exception as e:
                 print(f"답변 생성 중 오류 발생: {str(e)}")
                 print("기본 답변을 사용합니다.")
-                answer = get_default_context(question)
-                print(f"A: {answer}")
+                default_answer = get_default_context(question)
+                print(f"A: {default_answer}")
+                results.append((question, default_answer))
 
             print("-" * 50)
 
         print("\n=== 테스트 완료 ===")
 
-        # 질문과 최종 답변 정리
+        # 저장된 결과를 사용하여 최종 정리
         print("\n=== 질문과 최종 답변 정리 ===")
-        for i, (question, answer) in enumerate(zip(
-            test_questions,
-            [
-                get_answer(q, qa_model, qa_tokenizer, ko_en_model, ko_en_tokenizer, en_ko_model, en_ko_tokenizer)
-                for q in test_questions
-            ]
-        ), 1):
-            print(f"질문 {i}: {question}")
+        for i, (question, answer) in enumerate(results, 1):
+            print(f"\n질문 {i}: {question}")
             print(f"답변 {i}: {answer}")
             print("-" * 50)
 
     except Exception as e:
         print(f"\n프로그램 실행 중 오류 발생: {str(e)}")
+        import traceback
+        print(traceback.format_exc())
         
 if __name__ == "__main__":
     main()
